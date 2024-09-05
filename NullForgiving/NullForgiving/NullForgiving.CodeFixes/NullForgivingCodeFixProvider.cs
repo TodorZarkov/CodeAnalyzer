@@ -1,14 +1,13 @@
 ﻿namespace NullForgiving
 {
     using Microsoft.CodeAnalysis;
-    using Microsoft.CodeAnalysis.CodeActions;
     using Microsoft.CodeAnalysis.CodeFixes;
     using Microsoft.CodeAnalysis.CSharp;
     using Microsoft.CodeAnalysis.CSharp.Syntax;
+    using Microsoft.CodeAnalysis.Editing;
+    using Microsoft.CodeAnalysis.Formatting;
     using Microsoft.CodeAnalysis.Rename;
-    using Microsoft.CodeAnalysis.Text;
-    using System;
-    using System.Collections.Generic;
+    using Microsoft.CodeAnalysis.Simplification;
     using System.Collections.Immutable;
     using System.Composition;
     using System.Linq;
@@ -18,54 +17,73 @@
     [ExportCodeFixProvider(LanguageNames.CSharp, Name = nameof(NullForgivingCodeFixProvider)), Shared]
     public class NullForgivingCodeFixProvider : CodeFixProvider
     {
+        private const string title = "Make variable nullable";
+
         public sealed override ImmutableArray<string> FixableDiagnosticIds
         {
-            get { return ImmutableArray.Create(NullForgivingAnalyzer.DiagnosticId); }
+            get { return ImmutableArray.Create("TZ001"); } 
         }
 
         public sealed override FixAllProvider GetFixAllProvider()
         {
-            // See https://github.com/dotnet/roslyn/blob/main/docs/analyzers/FixAllProvider.md for more information on Fix All Providers
             return WellKnownFixAllProviders.BatchFixer;
         }
 
         public sealed override async Task RegisterCodeFixesAsync(CodeFixContext context)
         {
-            var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
-
-            // TODO: Replace the following code with your own analysis, generating a CodeAction for each fix to suggest
-            var diagnostic = context.Diagnostics.First();
+            var diagnostic = context.Diagnostics[0];
             var diagnosticSpan = diagnostic.Location.SourceSpan;
 
-            // Find the type declaration identified by the diagnostic.
-            var declaration = root.FindToken(diagnosticSpan.Start).Parent.AncestorsAndSelf().OfType<TypeDeclarationSyntax>().First();
+            // Find the variable declaration identified by the diagnostic
+            var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
+            var token = root.FindToken(diagnosticSpan.Start);
+            var node = token.Parent.AncestorsAndSelf().OfType<VariableDeclarationSyntax>().FirstOrDefault();
 
-            // Register a code action that will invoke the fix.
-            context.RegisterCodeFix(
-                CodeAction.Create(
-                    title: CodeFixResources.CodeFixTitle,
-                    createChangedSolution: c => MakeUppercaseAsync(context.Document, declaration, c),
-                    equivalenceKey: nameof(CodeFixResources.CodeFixTitle)),
-                diagnostic);
+            if (node != null)
+            {
+                context.RegisterCodeFix(
+                    Microsoft.CodeAnalysis.CodeActions.CodeAction.Create(
+                        title: title,
+                        createChangedDocument: c => MakeNullableAsync(context.Document, node, c),
+                        equivalenceKey: title),
+                    diagnostic);
+            }
         }
 
-        private async Task<Solution> MakeUppercaseAsync(Document document, TypeDeclarationSyntax typeDecl, CancellationToken cancellationToken)
+        private async Task<Document> MakeNullableAsync(Document document, VariableDeclarationSyntax variableDeclaration, CancellationToken cancellationToken)
         {
-            // Compute new uppercase name.
-            var identifierToken = typeDecl.Identifier;
-            var newName = identifierToken.Text.ToUpperInvariant();
+            var editor = await DocumentEditor.CreateAsync(document, cancellationToken).ConfigureAwait(false);
 
-            // Get the symbol representing the type to be renamed.
-            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
-            var typeSymbol = semanticModel.GetDeclaredSymbol(typeDecl, cancellationToken);
+            // 1. Change the variable's type to nullable
+            var variableType = variableDeclaration.Type;
 
-            // Produce a new solution that has all references to that type renamed, including the declaration.
-            var originalSolution = document.Project.Solution;
-            var optionSet = originalSolution.Workspace.Options;
-            var newSolution = await Renamer.RenameSymbolAsync(document.Project.Solution, typeSymbol, newName, optionSet, cancellationToken).ConfigureAwait(false);
+            // Create a nullable version of the type (e.g., string -> string?)
+            var nullableType = SyntaxFactory.NullableType(variableType)
+                                              .WithAdditionalAnnotations(Simplifier.Annotation, Formatter.Annotation);
 
-            // Return the new solution with the now-uppercase type name.
-            return newSolution;
+            // Replace the original type with the new nullable type
+            editor.ReplaceNode(variableType, nullableType);
+
+            // 2. Remove the null-forgiving operator (!) from the variable assignment or use
+            var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+
+            // Find all expressions that use the null-forgiving operator (e.g., nullableString!)
+            var nullForgivingExpressions = root.DescendantNodes()
+                .OfType<PostfixUnaryExpressionSyntax>()
+                .Where(e => e.OperatorToken.IsKind(SyntaxKind.ExclamationToken));
+
+            foreach (var nullForgivingExpression in nullForgivingExpressions)
+            {
+                // Replace the entire null-forgiving expression with the original expression (without the !)
+                var newExpression = nullForgivingExpression.Operand
+                    .WithAdditionalAnnotations(Simplifier.Annotation, Formatter.Annotation);
+
+                // Replace the null-forgiving operator with just the original expression
+                editor.ReplaceNode(nullForgivingExpression, newExpression);
+            }
+
+            // Return the updated document
+            return editor.GetChangedDocument();
         }
     }
 }
