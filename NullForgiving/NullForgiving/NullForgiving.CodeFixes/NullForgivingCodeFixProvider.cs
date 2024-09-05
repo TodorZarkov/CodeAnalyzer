@@ -6,7 +6,6 @@
     using Microsoft.CodeAnalysis.CSharp.Syntax;
     using Microsoft.CodeAnalysis.Editing;
     using Microsoft.CodeAnalysis.Formatting;
-    using Microsoft.CodeAnalysis.Rename;
     using Microsoft.CodeAnalysis.Simplification;
     using System.Collections.Immutable;
     using System.Composition;
