@@ -9,51 +9,63 @@
     [TestClass]
     public class NullForgivingUnitTest
     {
-        //No diagnostics expected to show up
         [TestMethod]
-        public async Task TestMethod1()
+        public async Task Test_No_Diagnostics_Expected_To_Show()
         {
-            var test = @"";
+            var test = @"
+#nullable enable
+
+using System;
+
+internal class Program
+{
+    private static void Main(string[] args)
+    {
+        string? text = null;
+        Console.WriteLine(text);
+    }
+
+}
+";
 
             await VerifyCS.VerifyAnalyzerAsync(test);
         }
 
-        //Diagnostic and CodeFix both triggered and checked for
         [TestMethod]
-        public async Task TestMethod2()
+        public async Task Test_For_Diagnostic_And_CodeFix()
         {
             var test = @"
-    using System;
-    using System.Collections.Generic;
-    using System.Linq;
-    using System.Text;
-    using System.Threading.Tasks;
-    using System.Diagnostics;
+#nullable enable
 
-    namespace ConsoleApplication1
+using System;
+
+internal class Program
+{
+    private static void Main(string[] args)
     {
-        class {|#0:TypeName|}
-        {   
-        }
-    }";
+        string text = {|#0:null!|};
+        Console.WriteLine(text);
+    }
 
-            var fixtest = @"
-    using System;
-    using System.Collections.Generic;
-    using System.Linq;
-    using System.Text;
-    using System.Threading.Tasks;
-    using System.Diagnostics;
+}";
 
-    namespace ConsoleApplication1
+            var fixTest = @"
+#nullable enable
+
+using System;
+
+internal class Program
+{
+    private static void Main(string[] args)
     {
-        class TYPENAME
-        {   
-        }
-    }";
+        string? text = null;
+        Console.WriteLine(text);
+    }
 
-            var expected = VerifyCS.Diagnostic("NullForgiving").WithLocation(0).WithArguments("TypeName");
-            await VerifyCS.VerifyCodeFixAsync(test, expected, fixtest);
+}";
+
+            var expected = VerifyCS.Diagnostic("TZ001").WithLocation(0).WithArguments("null!");
+            await VerifyCS.VerifyCodeFixAsync(test, expected, fixTest);
         }
     }
 }
